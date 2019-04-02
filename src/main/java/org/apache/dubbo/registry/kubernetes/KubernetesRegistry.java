@@ -14,6 +14,7 @@ import io.kubernetes.client.ApiException;
 import io.kubernetes.client.apis.CoreV1Api;
 import io.kubernetes.client.models.V1Pod;
 import io.kubernetes.client.util.Watch;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -53,9 +54,9 @@ public class KubernetesRegistry extends FailbackRegistry {
 
     private static ExecutorService kubernetesWatcher = null;
 
-    private final Map<URL,Watch> kubernetesWatcherMap = new ConcurrentHashMap<>(16);
+    private final Map<URL, Watch> kubernetesWatcherMap = new ConcurrentHashMap<>(16);
 
-    public KubernetesRegistry(ApiClient apiClient,URL url , CoreV1Api api) {
+    public KubernetesRegistry(ApiClient apiClient, URL url, CoreV1Api api) {
         super(url);
         this.apiClient = apiClient;
         this.api = api;
@@ -67,7 +68,7 @@ public class KubernetesRegistry extends FailbackRegistry {
     protected void doRegister(URL url) {
         try {
             V1Pod v1Pod = queryPodNameByUnRegistryUrl(url);
-            Map<String,String> labels = v1Pod.getMetadata().getLabels();
+            Map<String, String> labels = v1Pod.getMetadata().getLabels();
             labels.putAll(url2Labels(url));
             api.patchNamespacedPod(v1Pod.getMetadata().getName(), namespaces, v1Pod, "false", "");
         } catch (Exception e) {
@@ -79,7 +80,7 @@ public class KubernetesRegistry extends FailbackRegistry {
     protected void doUnregister(URL url) {
         try {
             V1Pod v1Pod = queryPodNameByRegistriedUrl(url);
-            api.deleteNamespacedPod(v1Pod.getMetadata().getName(),namespaces,null,null,null,null,null,null);
+            api.deleteNamespacedPod(v1Pod.getMetadata().getName(), namespaces, null, null, null, null, null, null);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -89,49 +90,28 @@ public class KubernetesRegistry extends FailbackRegistry {
     protected void doSubscribe(URL url, NotifyListener notifyListener) {
         final List<URL> urls = new ArrayList<>();
         if (ANY_VALUE.equals(url.getServiceInterface())) {
-            urls.addAll(api.listNamespacedPod().getItems().stream()
-                    .filter(v1Pod -> {
-                        return v1Pod.getStatus().getContainerStatuses().stream()
-                                .allMatch(v1ContainerStatus -> {
-                                    return false;
-                                });
-                    })
-                    .map(v1Pod -> {
-                        return pod2Url(v1Pod);
-                    })
-                    .collect(Collectors.toList()));
+
         } else {
-            String category = url.getServiceKey();
-            urls.addAll(api.listNamespacedPod().getItems().stream()
-                    .filter(v1Pod -> {
-                        return v1Pod.getMetadata().getLabels().get()
-                                && v1Pod.getStatus().getContainerStatuses().stream()
-                                .allMatch(v1ContainerStatus -> {
-                                    return false;
-                                });
-                    })
-                    .map(v1Pod -> {
-                        return pod2Url(v1Pod);
-                    })
-                    .collect(Collectors.toList()));
+
         }
         this.notify(url, notifyListener, urls);
         Watch<V1Pod> watch = Watch.createWatch(
                 apiClient,
                 api.listNamespacedPodCall(),
-                new TypeToken<Watch.Response<V1Pod>>() {}.getType()
+                new TypeToken<Watch.Response<V1Pod>>() {
+                }.getType()
         );
-        kubernetesWatcherMap.computeIfAbsent(url,k -> watch);
-        if(kubernetesWatcher == null){
+        kubernetesWatcherMap.computeIfAbsent(url, k -> watch);
+        if (kubernetesWatcher == null) {
             kubernetesWatcher = Executors.newSingleThreadScheduledExecutor(new NamedThreadFactory(""));
             ((ScheduledExecutorService) kubernetesWatcher)
-                    .scheduleAtFixedRate(doWatch(),INITAIL_DELAY,PERIOD, TimeUnit.SECONDS);
+                    .scheduleAtFixedRate(doWatch(), INITAIL_DELAY, PERIOD, TimeUnit.SECONDS);
         }
     }
 
     @Override
     protected void doUnsubscribe(URL url, NotifyListener notifyListener) {
-        Watch watch =kubernetesWatcherMap.remove(url);
+        Watch watch = kubernetesWatcherMap.remove(url);
         try {
             watch.close();
         } catch (IOException e) {
@@ -141,18 +121,12 @@ public class KubernetesRegistry extends FailbackRegistry {
 
     @Override
     public boolean isAvailable() {
-        return CollectionUtils.isNotEmpty(api.listNamespacedPod().getItems().stream()
-                .filter(v1Pod -> {
-                    return v1Pod.getMetadata().getLabels().get()
-                            && v1Pod.getStatus().getContainerStatuses().stream()
-                            .allMatch(v1ContainerStatus -> {
-                                return false;
-                            });
-                })
-                .map(v1Pod -> {
-                    return pod2Url(v1Pod);
-                })
-                .collect(Collectors.toList()));
+        try {
+            return CollectionUtils.isNotEmpty(getAllRinningService());
+        } catch (ApiException e) {
+            e.printStackTrace();
+        }
+        return false;
     }
 
     @Override
@@ -166,31 +140,31 @@ public class KubernetesRegistry extends FailbackRegistry {
             }
         });
         kubernetesWatcherMap.clear();
-        if(kubernetesWatcher != null){
+        if (kubernetesWatcher != null) {
             kubernetesWatcher.shutdown();
         }
     }
 
-    private final URL pod2Url(V1Pod pod) {
+    private URL pod2Url(V1Pod pod) {
         return URL.valueOf(pod.getMetadata().getLabels().get(FULL_URL));
     }
 
-    private final Map<String,String> url2Labels(URL url){
-        final Map<String,String> labels = new HashMap<>(16);
-        labels.put(MARK,Constants.DEFAULT_PROTOCOL);
-        labels.put(Constants.CATEGORY_KEY,url.getParameter(Constants.CATEGORY_KEY,Constants.DEFAULT_CATEGORY));
-        labels.put(FULL_URL,url.toFullString());
-        labels.put(Constants.INTERFACE_KEY,url.getServiceInterface());
+    private Map<String, String> url2Labels(URL url) {
+        final Map<String, String> labels = new HashMap<>(16);
+        labels.put(MARK, Constants.DEFAULT_PROTOCOL);
+        labels.put(Constants.CATEGORY_KEY, url.getParameter(Constants.CATEGORY_KEY, Constants.DEFAULT_CATEGORY));
+        labels.put(FULL_URL, url.toFullString());
+        labels.put(Constants.INTERFACE_KEY, url.getServiceInterface());
         labels.put(META_DATA, JSONObject.toJSONString(url.getParameters()));
         return labels;
     }
 
 
-    private V1Pod queryPodNameByUnRegistryUrl(URL url) throws Exception{
+    private V1Pod queryPodNameByUnRegistryUrl(URL url) throws Exception {
         return api.listNamespacedPod("", false, "false", null, null
                 , null, null, null, null, false).getItems()
                 .stream()
-                .filter( pod -> {
+                .filter(pod -> {
                     final String mark = pod.getMetadata().getName();
                     final String hostName = pod.getSpec().getHostname();
                     return StringUtils.isNotEmpty(mark) && mark.startsWith(podName)
@@ -199,43 +173,47 @@ public class KubernetesRegistry extends FailbackRegistry {
     }
 
 
-    private V1Pod queryPodNameByRegistriedUrl(URL url) throws Exception{
+    private V1Pod queryPodNameByRegistriedUrl(URL url) throws Exception {
         return api.listNamespacedPod("", false, "false", null, null
                 , null, null, null, null, false).getItems()
                 .stream()
-                .filter( pod -> {
+                .filter(pod -> {
                     final String mark = pod.getMetadata().getLabels().get(MARK);
                     final String fullUrl = pod.getMetadata().getLabels().get(FULL_URL);
                     return StringUtils.isNotEmpty(mark) && Constants.DEFAULT_PROTOCOL.equals(mark)
+                            && StringUtils.isNotEmpty(fullUrl) && url.toFullString().equals(fullUrl);
                 }).collect(Collectors.toList()).get(0);
     }
 
-    private List<URL> getAllRinningService() throws ApiException{
+    private List<URL> getAllRinningService() throws ApiException {
         return api.listNamespacedPod("", false, "false", null, null
                 , null, null, null, null, false).getItems()
                 .stream()
-                .filter(v1Pod -> {
-                    return v1Pod.getMetadata().getLabels().get(MARK) != null
-                            && v1Pod.getMetadata().getLabels().get(MARK).equals(Constants.DEFAULT_PROTOCOL)
-                            && v1Pod.getStatus().getContainerStatuses().stream()
-                            .allMatch(v1ContainerStatus -> {
-                                return v1ContainerStatus.getState().getRunning() != null;
-                            });
-                })
-                .map(v1Pod -> {
-                    return pod2Url(v1Pod);
-                })
+                .filter(v1Pod ->
+                        v1Pod.getMetadata().getLabels().get(MARK) != null
+                                && v1Pod.getMetadata().getLabels().get(MARK).equals(Constants.DEFAULT_PROTOCOL)
+                                && v1Pod.getStatus().getContainerStatuses().stream()
+                                .allMatch(v1ContainerStatus ->
+                                        v1ContainerStatus.getState().getRunning() != null
+                                )
+                )
+                .map(this::pod2Url)
                 .collect(Collectors.toList());
     }
 
-    private Runnable doWatch(){
-        return ()->{
-            kubernetesWatcherMap.keySet().forEach( url ->{
+    private Runnable doWatch() {
+        return () -> {
+            kubernetesWatcherMap.keySet().forEach(url -> {
                 Watch watch = kubernetesWatcherMap.get(url);
-                watch.forEach( action ->{
-
-                });
+                while (watch.hasNext()){
+                    Watch.Response response = watch.next();
+                    processWatchReponse(response);
+                }
             });
         };
+    }
+
+    private void processWatchReponse(Watch.Response response){
+
     }
 }
