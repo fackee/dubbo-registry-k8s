@@ -2,6 +2,8 @@ package org.apache.dubbo.registry.kubernetes;
 
 import com.alibaba.dubbo.common.Constants;
 import com.alibaba.dubbo.common.URL;
+import com.alibaba.dubbo.common.logger.Logger;
+import com.alibaba.dubbo.common.logger.LoggerFactory;
 import com.alibaba.dubbo.common.utils.CollectionUtils;
 import com.alibaba.dubbo.common.utils.NamedThreadFactory;
 import com.alibaba.dubbo.common.utils.StringUtils;
@@ -13,6 +15,7 @@ import io.kubernetes.client.ApiClient;
 import io.kubernetes.client.ApiException;
 import io.kubernetes.client.apis.CoreV1Api;
 import io.kubernetes.client.models.V1Pod;
+import io.kubernetes.client.models.V1Status;
 import io.kubernetes.client.util.Watch;
 
 import java.io.IOException;
@@ -34,6 +37,8 @@ import static org.apache.dubbo.registry.kubernetes.KubernetesRegistryFactory.KUB
  */
 public class KubernetesRegistry extends FailbackRegistry {
 
+    private static final Logger logger = LoggerFactory.getLogger(KubernetesRegistry.class);
+
     private CoreV1Api api;
 
     private final String namespaces;
@@ -46,11 +51,15 @@ public class KubernetesRegistry extends FailbackRegistry {
 
     private final static String META_DATA = "mate";
 
+    private final static String SVC_KEY = "service_key";
+
     private static final String MARK = "mark";
 
     private static final Long INITAIL_DELAY = 0L;
 
     private static final Long PERIOD = 10L;
+
+    private static final Integer CALL_TIMEOUT = 10;
 
     private static ExecutorService kubernetesWatcher = null;
 
@@ -72,7 +81,9 @@ public class KubernetesRegistry extends FailbackRegistry {
             labels.putAll(url2Labels(url));
             api.patchNamespacedPod(v1Pod.getMetadata().getName(), namespaces, v1Pod, "false", "");
         } catch (Exception e) {
-            e.printStackTrace();
+            if (logger.isErrorEnabled()) {
+                logger.error(e.getMessage(), e);
+            }
         }
     }
 
@@ -82,28 +93,33 @@ public class KubernetesRegistry extends FailbackRegistry {
             V1Pod v1Pod = queryPodNameByRegistriedUrl(url);
             api.deleteNamespacedPod(v1Pod.getMetadata().getName(), namespaces, null, null, null, null, null, null);
         } catch (Exception e) {
-            e.printStackTrace();
+            if (logger.isErrorEnabled()) {
+                logger.error(e.getMessage(), e);
+            }
         }
     }
 
     @Override
     protected void doSubscribe(URL url, NotifyListener notifyListener) {
-        final List<URL> urls = new ArrayList<>();
-        if (ANY_VALUE.equals(url.getServiceInterface())) {
-
-        } else {
-
-        }
+        final List<URL> urls = queryUrls(url);
         this.notify(url, notifyListener, urls);
-        Watch<V1Pod> watch = Watch.createWatch(
-                apiClient,
-                api.listNamespacedPodCall(),
-                new TypeToken<Watch.Response<V1Pod>>() {
-                }.getType()
-        );
-        kubernetesWatcherMap.computeIfAbsent(url, k -> watch);
+        try {
+            final Watch<V1Pod> watch = Watch.createWatch(
+                    apiClient,
+                    api.listNamespacedPodCall(null, null, null,
+                            null, null, null,
+                            -1, null, CALL_TIMEOUT, Boolean.TRUE, null, null),
+                    new TypeToken<Watch.Response<V1Pod>>() {
+                    }.getType()
+            );
+            kubernetesWatcherMap.computeIfAbsent(url, k -> watch);
+        } catch (ApiException e) {
+            if (logger.isErrorEnabled()) {
+                logger.error(e.getMessage(), e);
+            }
+        }
         if (kubernetesWatcher == null) {
-            kubernetesWatcher = Executors.newSingleThreadScheduledExecutor(new NamedThreadFactory(""));
+            kubernetesWatcher = Executors.newSingleThreadScheduledExecutor(new NamedThreadFactory("KUBERNETES_WATCHER_EXECUTOR"));
             ((ScheduledExecutorService) kubernetesWatcher)
                     .scheduleAtFixedRate(doWatch(), INITAIL_DELAY, PERIOD, TimeUnit.SECONDS);
         }
@@ -115,7 +131,9 @@ public class KubernetesRegistry extends FailbackRegistry {
         try {
             watch.close();
         } catch (IOException e) {
-            e.printStackTrace();
+            if (logger.isErrorEnabled()) {
+                logger.error(e.getMessage(), e);
+            }
         }
     }
 
@@ -124,7 +142,9 @@ public class KubernetesRegistry extends FailbackRegistry {
         try {
             return CollectionUtils.isNotEmpty(getAllRinningService());
         } catch (ApiException e) {
-            e.printStackTrace();
+            if (logger.isErrorEnabled()) {
+                logger.error(e.getMessage(), e);
+            }
         }
         return false;
     }
@@ -136,7 +156,9 @@ public class KubernetesRegistry extends FailbackRegistry {
             try {
                 watch.close();
             } catch (IOException e) {
-                e.printStackTrace();
+                if (logger.isErrorEnabled()) {
+                    logger.error(e.getMessage(), e);
+                }
             }
         });
         kubernetesWatcherMap.clear();
@@ -152,13 +174,13 @@ public class KubernetesRegistry extends FailbackRegistry {
     private Map<String, String> url2Labels(URL url) {
         final Map<String, String> labels = new HashMap<>(16);
         labels.put(MARK, Constants.DEFAULT_PROTOCOL);
+        labels.put(SVC_KEY, url.getServiceKey());
         labels.put(Constants.CATEGORY_KEY, url.getParameter(Constants.CATEGORY_KEY, Constants.DEFAULT_CATEGORY));
         labels.put(FULL_URL, url.toFullString());
         labels.put(Constants.INTERFACE_KEY, url.getServiceInterface());
         labels.put(META_DATA, JSONObject.toJSONString(url.getParameters()));
         return labels;
     }
-
 
     private V1Pod queryPodNameByUnRegistryUrl(URL url) throws Exception {
         return api.listNamespacedPod("", false, "false", null, null
@@ -171,7 +193,6 @@ public class KubernetesRegistry extends FailbackRegistry {
                             && StringUtils.isNotEmpty(hostName) && url.getHost().equals(hostName);
                 }).collect(Collectors.toList()).get(0);
     }
-
 
     private V1Pod queryPodNameByRegistriedUrl(URL url) throws Exception {
         return api.listNamespacedPod("", false, "false", null, null
@@ -201,19 +222,63 @@ public class KubernetesRegistry extends FailbackRegistry {
                 .collect(Collectors.toList());
     }
 
+    private List<URL> getServicesByKey(String serviceKey) throws ApiException {
+        return api.listNamespacedPod("", false, "false", null, null
+                , null, null, null, null, false).getItems()
+                .stream()
+                .filter(v1Pod ->
+                        v1Pod.getMetadata().getLabels().get(MARK) != null
+                                && v1Pod.getMetadata().getLabels().get(MARK).equals(Constants.DEFAULT_PROTOCOL)
+                                && v1Pod.getMetadata().getLabels().get(SVC_KEY) != null
+                                && v1Pod.getMetadata().getLabels().get(SVC_KEY).equals(serviceKey)
+                                && v1Pod.getStatus().getContainerStatuses().stream()
+                                .allMatch(v1ContainerStatus ->
+                                        v1ContainerStatus.getState().getRunning() != null
+                                )
+                )
+                .map(this::pod2Url)
+                .collect(Collectors.toList());
+    }
+
+    private List<URL> queryUrls(URL url) {
+        final List<URL> urls = new ArrayList<>();
+        if (ANY_VALUE.equals(url.getServiceInterface())) {
+            try {
+                urls.addAll(getAllRinningService());
+            } catch (ApiException e) {
+                if (logger.isErrorEnabled()) {
+                    logger.error(e.getMessage(), e);
+                }
+            }
+        } else {
+            String serviceKey = url.getServiceKey();
+            try {
+                urls.addAll(getServicesByKey(serviceKey));
+            } catch (ApiException e) {
+                if (logger.isErrorEnabled()) {
+                    logger.error(e.getMessage(), e);
+                }
+            }
+        }
+        return urls;
+    }
+
     private Runnable doWatch() {
         return () -> {
             kubernetesWatcherMap.keySet().forEach(url -> {
                 Watch watch = kubernetesWatcherMap.get(url);
-                while (watch.hasNext()){
+                while (watch.hasNext()) {
                     Watch.Response response = watch.next();
-                    processWatchReponse(response);
+                    processWatchReponse(url);
                 }
             });
         };
     }
 
-    private void processWatchReponse(Watch.Response response){
-
+    private void processWatchReponse(URL url) {
+        final List<URL> urls = queryUrls(url);
+        for (NotifyListener listener : getSubscribed().get(url)) {
+            doNotify(url, listener, urls);
+        }
     }
 }
