@@ -42,7 +42,7 @@ public class KubernetesRegistryFactory extends AbstractRegistryFactory {
             ApiClient apiClient = Config.defaultClient();
             Configuration.setDefaultApiClient(apiClient);
             CoreV1Api coreV1Api = new CoreV1Api();
-            registry = new KubernetesRegistry(url , coreV1Api);
+            registry = new KubernetesRegistry(apiClient, url, coreV1Api);
         } catch (IOException e) {
             logger.error("create kubernetes ApiClient exception", e);
         }

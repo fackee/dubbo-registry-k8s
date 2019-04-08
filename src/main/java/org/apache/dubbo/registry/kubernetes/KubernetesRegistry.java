@@ -15,7 +15,6 @@ import io.kubernetes.client.ApiClient;
 import io.kubernetes.client.ApiException;
 import io.kubernetes.client.apis.CoreV1Api;
 import io.kubernetes.client.models.V1Pod;
-import io.kubernetes.client.models.V1Status;
 import io.kubernetes.client.util.Watch;
 
 import java.io.IOException;
