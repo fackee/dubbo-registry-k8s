@@ -5,23 +5,17 @@ import com.alibaba.dubbo.common.URL;
 import com.alibaba.dubbo.common.logger.Logger;
 import com.alibaba.dubbo.common.logger.LoggerFactory;
 import com.alibaba.dubbo.common.utils.CollectionUtils;
-import com.alibaba.dubbo.common.utils.NamedThreadFactory;
-import com.alibaba.dubbo.common.utils.StringUtils;
 import com.alibaba.dubbo.registry.NotifyListener;
 import com.alibaba.dubbo.registry.support.FailbackRegistry;
 import com.alibaba.fastjson.JSONObject;
-import com.google.gson.reflect.TypeToken;
-import io.kubernetes.client.ApiClient;
-import io.kubernetes.client.ApiException;
-import io.kubernetes.client.apis.CoreV1Api;
-import io.kubernetes.client.models.V1Pod;
-import io.kubernetes.client.util.Watch;
+import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.PodList;
+import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.KubernetesClientException;
+import io.fabric8.kubernetes.client.Watch;
+import io.fabric8.kubernetes.client.Watcher;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
@@ -38,13 +32,11 @@ public class KubernetesRegistry extends FailbackRegistry {
 
     private static final Logger logger = LoggerFactory.getLogger(KubernetesRegistry.class);
 
-    private CoreV1Api api;
-
     private final String namespaces;
 
     private final String podName;
 
-    private final ApiClient apiClient;
+    private final KubernetesClient kubernetesClient;
 
     private final static String FULL_URL = "full_url";
 
@@ -54,119 +46,101 @@ public class KubernetesRegistry extends FailbackRegistry {
 
     private static final String MARK = "mark";
 
-    private static final Long INITAIL_DELAY = 0L;
-
-    private static final Long PERIOD = 10L;
-
-    private static final Integer CALL_TIMEOUT = 10;
-
-    private static ExecutorService kubernetesWatcher = null;
+    private static final String APP_LABEL = "app";
 
     private final Map<URL, Watch> kubernetesWatcherMap = new ConcurrentHashMap<>(16);
 
-    public KubernetesRegistry(ApiClient apiClient, URL url, CoreV1Api api) {
+    public KubernetesRegistry(KubernetesClient kubernetesClient, URL url) {
         super(url);
-        this.apiClient = apiClient;
-        this.api = api;
+        this.kubernetesClient = kubernetesClient;
         this.namespaces = url.getParameter(KUBERNETES_NAMESPACES_KEY);
         this.podName = url.getParameter(KUBERNETES_POD_NAME_KEY);
     }
 
     @Override
     protected void doRegister(URL url) {
-        try {
-            V1Pod v1Pod = queryPodNameByUnRegistryUrl(url);
-            Map<String, String> labels = v1Pod.getMetadata().getLabels();
+        PodList pods = queryPodsByUnRegistryUrl(url);
+        pods.getItems().forEach(pod -> {
+            final Map<String, String> labels = pod.getMetadata().getLabels();
             labels.putAll(url2Labels(url));
-            api.patchNamespacedPod(v1Pod.getMetadata().getName(), namespaces, v1Pod, "false", "");
-        } catch (Exception e) {
-            if (logger.isErrorEnabled()) {
-                logger.error(e.getMessage(), e);
-            }
-        }
+            kubernetesClient.pods().createOrReplace(pod);
+        });
     }
 
     @Override
     protected void doUnregister(URL url) {
-        try {
-            V1Pod v1Pod = queryPodNameByRegistriedUrl(url);
-            api.deleteNamespacedPod(v1Pod.getMetadata().getName(), namespaces, null, null, null, null, null, null);
-        } catch (Exception e) {
-            if (logger.isErrorEnabled()) {
-                logger.error(e.getMessage(), e);
-            }
-        }
+        PodList pods = queryPodNameByRegistriedUrl(url);
+        pods.getItems().forEach(pod -> {
+            removeLabels(pod);
+            kubernetesClient.pods().createOrReplace(pod);
+        });
     }
 
     @Override
     protected void doSubscribe(URL url, NotifyListener notifyListener) {
         final List<URL> urls = queryUrls(url);
         this.notify(url, notifyListener, urls);
-        try {
-            final Watch<V1Pod> watch = Watch.createWatch(
-                    apiClient,
-                    api.listNamespacedPodCall(null, null, null,
-                            null, null, null,
-                            -1, null, CALL_TIMEOUT, Boolean.TRUE, null, null),
-                    new TypeToken<Watch.Response<V1Pod>>() {
-                    }.getType()
-            );
-            kubernetesWatcherMap.computeIfAbsent(url, k -> watch);
-        } catch (ApiException e) {
-            if (logger.isErrorEnabled()) {
-                logger.error(e.getMessage(), e);
-            }
-        }
-        if (kubernetesWatcher == null) {
-            kubernetesWatcher = Executors.newSingleThreadScheduledExecutor(new NamedThreadFactory("KUBERNETES_WATCHER_EXECUTOR"));
-            ((ScheduledExecutorService) kubernetesWatcher)
-                    .scheduleAtFixedRate(doWatch(), INITAIL_DELAY, PERIOD, TimeUnit.SECONDS);
-        }
+
+        kubernetesWatcherMap.computeIfAbsent(url, k ->
+                kubernetesClient.pods().inNamespace(namespaces).withLabel(APP_LABEL, url.getParameter(KUBERNETES_POD_NAME_KEY))
+                        .watch(new Watcher<Pod>() {
+                            @Override
+                            public void eventReceived(Action action, Pod pod) {
+                                final List<URL> urlList =
+                                        kubernetesClient.pods().withLabel(APP_LABEL, url.getParameter(KUBERNETES_POD_NAME_KEY))
+                                                .list().getItems()
+                                                .stream()
+                                                .filter(p -> {
+                                                    if (p.getStatus().getPhase().equals(KubernetesStatus.Running.name())) {
+                                                        Map<String, String> labels = p.getMetadata().getLabels();
+                                                        if (labels.get(MARK) == null) {
+                                                            labels.putAll(url2Labels(url));
+                                                            kubernetesClient.pods().createOrReplace(p);
+                                                        }
+                                                        return true;
+                                                    } else {
+                                                        return false;
+                                                    }
+                                                })
+                                                .map(KubernetesRegistry.this::pod2Url)
+                                                .collect(Collectors.toList());
+                                doNotify(url, notifyListener, urlList);
+                            }
+
+                            @Override
+                            public void onClose(KubernetesClientException e) {
+                                if (logger.isDebugEnabled()) {
+                                    logger.debug("pod watch closed");
+                                }
+                                if (e != null) {
+                                    logger.error("watcher onClose exception", e);
+                                }
+                            }
+                        }));
     }
 
     @Override
     protected void doUnsubscribe(URL url, NotifyListener notifyListener) {
         Watch watch = kubernetesWatcherMap.remove(url);
-        try {
-            watch.close();
-        } catch (IOException e) {
-            if (logger.isErrorEnabled()) {
-                logger.error(e.getMessage(), e);
-            }
-        }
+        watch.close();
     }
 
     @Override
     public boolean isAvailable() {
-        try {
-            return CollectionUtils.isNotEmpty(getAllRinningService());
-        } catch (ApiException e) {
-            if (logger.isErrorEnabled()) {
-                logger.error(e.getMessage(), e);
-            }
-        }
-        return false;
+        return CollectionUtils.isNotEmpty(getAllRunningService());
     }
 
     @Override
     public void destroy() {
         super.destroy();
-        kubernetesWatcherMap.values().forEach(watch -> {
-            try {
-                watch.close();
-            } catch (IOException e) {
-                if (logger.isErrorEnabled()) {
-                    logger.error(e.getMessage(), e);
-                }
-            }
+        Collection<URL> urls = Collections.unmodifiableSet(kubernetesWatcherMap.keySet());
+        urls.forEach(url -> {
+            Watch watch = kubernetesWatcherMap.remove(url);
+            watch.close();
         });
-        kubernetesWatcherMap.clear();
-        if (kubernetesWatcher != null) {
-            kubernetesWatcher.shutdown();
-        }
     }
 
-    private URL pod2Url(V1Pod pod) {
+    private URL pod2Url(Pod pod) {
         return URL.valueOf(pod.getMetadata().getLabels().get(FULL_URL));
     }
 
@@ -181,60 +155,46 @@ public class KubernetesRegistry extends FailbackRegistry {
         return labels;
     }
 
-    private V1Pod queryPodNameByUnRegistryUrl(URL url) throws Exception {
-        return api.listNamespacedPod("", false, "false", null, null
-                , null, null, null, null, false).getItems()
-                .stream()
-                .filter(pod -> {
-                    final String mark = pod.getMetadata().getName();
-                    final String hostName = pod.getSpec().getHostname();
-                    return StringUtils.isNotEmpty(mark) && mark.startsWith(podName)
-                            && StringUtils.isNotEmpty(hostName) && url.getHost().equals(hostName);
-                }).collect(Collectors.toList()).get(0);
+    private void removeLabels(Pod pod) {
+        pod.getMetadata().getLabels().remove(MARK);
+        pod.getMetadata().getLabels().remove(SVC_KEY);
+        pod.getMetadata().getLabels().remove(Constants.CATEGORY_KEY);
+        pod.getMetadata().getLabels().remove(FULL_URL);
+        pod.getMetadata().getLabels().remove(Constants.INTERFACE_KEY);
+        pod.getMetadata().getLabels().remove(META_DATA);
     }
 
-    private V1Pod queryPodNameByRegistriedUrl(URL url) throws Exception {
-        return api.listNamespacedPod("", false, "false", null, null
-                , null, null, null, null, false).getItems()
-                .stream()
-                .filter(pod -> {
-                    final String mark = pod.getMetadata().getLabels().get(MARK);
-                    final String fullUrl = pod.getMetadata().getLabels().get(FULL_URL);
-                    return StringUtils.isNotEmpty(mark) && Constants.DEFAULT_PROTOCOL.equals(mark)
-                            && StringUtils.isNotEmpty(fullUrl) && url.toFullString().equals(fullUrl);
-                }).collect(Collectors.toList()).get(0);
+    private PodList queryPodsByUnRegistryUrl(URL url) {
+        return kubernetesClient.pods()
+                .inNamespace(namespaces)
+                .withLabel(APP_LABEL, url.getParameter(KUBERNETES_POD_NAME_KEY))
+                .list();
     }
 
-    private List<URL> getAllRinningService() throws ApiException {
-        return api.listNamespacedPod("", false, "false", null, null
-                , null, null, null, null, false).getItems()
-                .stream()
-                .filter(v1Pod ->
-                        v1Pod.getMetadata().getLabels().get(MARK) != null
-                                && v1Pod.getMetadata().getLabels().get(MARK).equals(Constants.DEFAULT_PROTOCOL)
-                                && v1Pod.getStatus().getContainerStatuses().stream()
-                                .allMatch(v1ContainerStatus ->
-                                        v1ContainerStatus.getState().getRunning() != null
-                                )
-                )
+    private PodList queryPodNameByRegistriedUrl(URL url) {
+        return kubernetesClient.pods()
+                .inNamespace(namespaces)
+                .withLabel(APP_LABEL, podName)
+                .withLabel(MARK, Constants.DEFAULT_PROTOCOL)
+                .withLabel(FULL_URL, url.toFullString())
+                .list();
+    }
+
+    private List<URL> getAllRunningService() {
+        return kubernetesClient.pods()
+                .withLabel(MARK, Constants.DEFAULT_PROTOCOL)
+                .list().getItems().stream()
+                .filter(pod -> pod.getStatus().getPhase().equals(KubernetesStatus.Running.name()))
                 .map(this::pod2Url)
                 .collect(Collectors.toList());
     }
 
-    private List<URL> getServicesByKey(String serviceKey) throws ApiException {
-        return api.listNamespacedPod("", false, "false", null, null
-                , null, null, null, null, false).getItems()
-                .stream()
-                .filter(v1Pod ->
-                        v1Pod.getMetadata().getLabels().get(MARK) != null
-                                && v1Pod.getMetadata().getLabels().get(MARK).equals(Constants.DEFAULT_PROTOCOL)
-                                && v1Pod.getMetadata().getLabels().get(SVC_KEY) != null
-                                && v1Pod.getMetadata().getLabels().get(SVC_KEY).equals(serviceKey)
-                                && v1Pod.getStatus().getContainerStatuses().stream()
-                                .allMatch(v1ContainerStatus ->
-                                        v1ContainerStatus.getState().getRunning() != null
-                                )
-                )
+    private List<URL> getServicesByKey(String serviceKey) {
+        return kubernetesClient.pods()
+                .withLabel(MARK, Constants.DEFAULT_PROTOCOL)
+                .withLabel(SVC_KEY, serviceKey)
+                .list().getItems().stream()
+                .filter(pod -> pod.getStatus().getPhase().equals(KubernetesStatus.Running.name()))
                 .map(this::pod2Url)
                 .collect(Collectors.toList());
     }
@@ -242,42 +202,16 @@ public class KubernetesRegistry extends FailbackRegistry {
     private List<URL> queryUrls(URL url) {
         final List<URL> urls = new ArrayList<>();
         if (ANY_VALUE.equals(url.getServiceInterface())) {
-            try {
-                urls.addAll(getAllRinningService());
-            } catch (ApiException e) {
-                if (logger.isErrorEnabled()) {
-                    logger.error(e.getMessage(), e);
-                }
-            }
+            urls.addAll(getAllRunningService());
         } else {
-            String serviceKey = url.getServiceKey();
-            try {
-                urls.addAll(getServicesByKey(serviceKey));
-            } catch (ApiException e) {
-                if (logger.isErrorEnabled()) {
-                    logger.error(e.getMessage(), e);
-                }
-            }
+            urls.addAll(getServicesByKey(url.getServiceKey()));
         }
         return urls;
     }
 
-    private Runnable doWatch() {
-        return () -> {
-            kubernetesWatcherMap.keySet().forEach(url -> {
-                Watch watch = kubernetesWatcherMap.get(url);
-                while (watch.hasNext()) {
-                    Watch.Response response = watch.next();
-                    processWatchReponse(url);
-                }
-            });
-        };
-    }
-
-    private void processWatchReponse(URL url) {
-        final List<URL> urls = queryUrls(url);
-        for (NotifyListener listener : getSubscribed().get(url)) {
-            doNotify(url, listener, urls);
-        }
+    enum KubernetesStatus {
+        Running,
+        Pending,
+        Terminating;
     }
 }
