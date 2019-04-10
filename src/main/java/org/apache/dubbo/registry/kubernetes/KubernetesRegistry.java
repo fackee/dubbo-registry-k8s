@@ -34,8 +34,6 @@ public class KubernetesRegistry extends FailbackRegistry {
 
     private final String namespaces;
 
-    private final String podName;
-
     private final KubernetesClient kubernetesClient;
 
     private final static String FULL_URL = "full_url";
@@ -54,7 +52,6 @@ public class KubernetesRegistry extends FailbackRegistry {
         super(url);
         this.kubernetesClient = kubernetesClient;
         this.namespaces = url.getParameter(KUBERNETES_NAMESPACES_KEY);
-        this.podName = url.getParameter(KUBERNETES_POD_NAME_KEY);
     }
 
     @Override
@@ -174,7 +171,7 @@ public class KubernetesRegistry extends FailbackRegistry {
     private PodList queryPodNameByRegistriedUrl(URL url) {
         return kubernetesClient.pods()
                 .inNamespace(namespaces)
-                .withLabel(APP_LABEL, podName)
+                .withLabel(APP_LABEL, url.getParameter(KUBERNETES_POD_NAME_KEY))
                 .withLabel(MARK, Constants.DEFAULT_PROTOCOL)
                 .withLabel(FULL_URL, url.toFullString())
                 .list();
