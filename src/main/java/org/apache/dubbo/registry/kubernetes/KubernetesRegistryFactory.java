@@ -14,7 +14,7 @@ import java.util.Map;
  */
 public class KubernetesRegistryFactory extends AbstractRegistryFactory {
 
-    protected static final String KUBERNETES_NAMESPACES_KEY = "kubernetes-namespace";
+    protected static final String KUBERNETES_NAMESPACES_KEY = "group";
 
     protected static final String KUBERNETES_POD_NAME_KEY = "application";
 

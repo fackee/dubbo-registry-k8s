@@ -7,9 +7,9 @@ import com.alibaba.dubbo.common.logger.LoggerFactory;
 import com.alibaba.dubbo.common.utils.CollectionUtils;
 import com.alibaba.dubbo.registry.NotifyListener;
 import com.alibaba.dubbo.registry.support.FailbackRegistry;
+import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import io.fabric8.kubernetes.api.model.Pod;
-import io.fabric8.kubernetes.api.model.PodList;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientException;
 import io.fabric8.kubernetes.client.Watch;
@@ -17,6 +17,7 @@ import io.fabric8.kubernetes.client.Watcher;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import static com.alibaba.dubbo.common.Constants.ANY_VALUE;
@@ -38,13 +39,15 @@ public class KubernetesRegistry extends FailbackRegistry {
 
     private final static String FULL_URL = "full_url";
 
-    private final static String META_DATA = "mate";
-
     private final static String SVC_KEY = "service_key";
 
     private static final String MARK = "mark";
 
     private static final String APP_LABEL = "app";
+
+    private static final String DUBBO_META_KEY = Constants.DEFAULT_PROTOCOL + "_meta_";
+
+    private final AtomicInteger serviceCounter;
 
     private final Map<URL, Watch> kubernetesWatcherMap = new ConcurrentHashMap<>(16);
 
@@ -52,25 +55,23 @@ public class KubernetesRegistry extends FailbackRegistry {
         super(url);
         this.kubernetesClient = kubernetesClient;
         this.namespaces = url.getParameter(KUBERNETES_NAMESPACES_KEY);
+        serviceCounter = new AtomicInteger(0);
     }
 
     @Override
     protected void doRegister(URL url) {
-        PodList pods = queryPodsByUnRegistryUrl(url);
-        pods.getItems().forEach(pod -> {
-            final Map<String, String> labels = pod.getMetadata().getLabels();
-            labels.putAll(url2Labels(url));
-            kubernetesClient.pods().createOrReplace(pod);
-        });
+        List<Pod> pods = queryPodsByUnRegistryUrl(url);
+        if (pods != null && pods.size() > 0) {
+            pods.forEach(pod -> registry(url, pod));
+        }
     }
 
     @Override
     protected void doUnregister(URL url) {
-        PodList pods = queryPodNameByRegistriedUrl(url);
-        pods.getItems().forEach(pod -> {
-            removeLabels(pod);
-            kubernetesClient.pods().createOrReplace(pod);
-        });
+        List<Pod> pods = queryPodNameByRegistriedUrl(url);
+        if (pods != null && pods.size() > 0) {
+            pods.forEach(this::unregistry);
+        }
     }
 
     @Override
@@ -91,8 +92,7 @@ public class KubernetesRegistry extends FailbackRegistry {
                                                     if (p.getStatus().getPhase().equals(KubernetesStatus.Running.name())) {
                                                         Map<String, String> labels = p.getMetadata().getLabels();
                                                         if (labels.get(MARK) == null) {
-                                                            labels.putAll(url2Labels(url));
-                                                            kubernetesClient.pods().createOrReplace(p);
+                                                            registry(url, p);
                                                         }
                                                         return true;
                                                     } else {
@@ -138,43 +138,76 @@ public class KubernetesRegistry extends FailbackRegistry {
     }
 
     private URL pod2Url(Pod pod) {
-        return URL.valueOf(pod.getMetadata().getLabels().get(FULL_URL));
+        final JSONObject dubboMeta = new JSONObject();
+        pod.getMetadata().getAnnotations().forEach((key, value) -> {
+            if (key.startsWith(DUBBO_META_KEY)) {
+                dubboMeta.putAll(JSON.parseObject(value));
+            }
+        });
+        String fullUrl = dubboMeta.getString(FULL_URL);
+        return URL.valueOf(fullUrl);
     }
 
-    private Map<String, String> url2Labels(URL url) {
-        final Map<String, String> labels = new HashMap<>(16);
-        labels.put(MARK, Constants.DEFAULT_PROTOCOL);
-        labels.put(SVC_KEY, url.getServiceKey());
-        labels.put(Constants.CATEGORY_KEY, url.getParameter(Constants.CATEGORY_KEY, Constants.DEFAULT_CATEGORY));
-        labels.put(FULL_URL, url.toFullString());
-        labels.put(Constants.INTERFACE_KEY, url.getServiceInterface());
-        labels.put(META_DATA, JSONObject.toJSONString(url.getParameters()));
-        return labels;
+    private void registry(URL url, Pod pod) {
+        JSONObject meta = new JSONObject() {{
+            put(Constants.INTERFACE_KEY, url.getServiceInterface());
+            put(SVC_KEY, url.getServiceKey());
+            put(FULL_URL, url.toFullString());
+            putAll(url.getParameters());
+        }};
+
+        kubernetesClient.pods().inNamespace(pod.getMetadata().getNamespace()).withName(pod.getMetadata().getName())
+                .edit()
+                .editMetadata()
+                .addToLabels(MARK, Constants.DEFAULT_PROTOCOL)
+                .addToAnnotations(DUBBO_META_KEY + serviceCounter.getAndIncrement(), meta.toJSONString())
+                .and()
+                .done();
     }
 
-    private void removeLabels(Pod pod) {
-        pod.getMetadata().getLabels().remove(MARK);
-        pod.getMetadata().getLabels().remove(SVC_KEY);
-        pod.getMetadata().getLabels().remove(Constants.CATEGORY_KEY);
-        pod.getMetadata().getLabels().remove(FULL_URL);
-        pod.getMetadata().getLabels().remove(Constants.INTERFACE_KEY);
-        pod.getMetadata().getLabels().remove(META_DATA);
+    private void unregistry(Pod pod) {
+        Pod registedPod = kubernetesClient.pods().inNamespace(pod.getMetadata().getNamespace()).withName(pod.getMetadata().getName()).get();
+        final StringBuilder removeKey = new StringBuilder();
+        if (registedPod.getMetadata().getAnnotations() != null) {
+            registedPod.getMetadata().getAnnotations().forEach((key, value) -> {
+                if (key.startsWith(DUBBO_META_KEY)) {
+                    removeKey.append(key);
+                }
+            });
+        }
+        kubernetesClient.pods().inNamespace(pod.getMetadata().getNamespace()).withName(pod.getMetadata().getName())
+                .edit()
+                .editMetadata()
+                .removeFromLabels(MARK)
+                .removeFromAnnotations(removeKey.toString())
+                .and()
+                .done();
     }
 
-    private PodList queryPodsByUnRegistryUrl(URL url) {
+    private List<Pod> queryPodsByUnRegistryUrl(URL url) {
         return kubernetesClient.pods()
                 .inNamespace(namespaces)
                 .withLabel(APP_LABEL, url.getParameter(KUBERNETES_POD_NAME_KEY))
-                .list();
+                .list().getItems();
     }
 
-    private PodList queryPodNameByRegistriedUrl(URL url) {
+    private List<Pod> queryPodNameByRegistriedUrl(URL url) {
         return kubernetesClient.pods()
                 .inNamespace(namespaces)
                 .withLabel(APP_LABEL, url.getParameter(KUBERNETES_POD_NAME_KEY))
                 .withLabel(MARK, Constants.DEFAULT_PROTOCOL)
-                .withLabel(FULL_URL, url.toFullString())
-                .list();
+                .list().getItems().stream()
+                .filter(pod -> {
+                    final JSONObject dubboMeta = new JSONObject();
+                    pod.getMetadata().getAnnotations().forEach((key, value) -> {
+                        if (key.startsWith(DUBBO_META_KEY)) {
+                            dubboMeta.putAll(JSON.parseObject(value));
+                        }
+                    });
+                    String fullUrl = dubboMeta.getString(FULL_URL);
+                    return fullUrl != null && fullUrl.equals(url.toFullString());
+                })
+                .collect(Collectors.toList());
     }
 
     private List<URL> getAllRunningService() {
@@ -189,9 +222,18 @@ public class KubernetesRegistry extends FailbackRegistry {
     private List<URL> getServicesByKey(String serviceKey) {
         return kubernetesClient.pods()
                 .withLabel(MARK, Constants.DEFAULT_PROTOCOL)
-                .withLabel(SVC_KEY, serviceKey)
                 .list().getItems().stream()
-                .filter(pod -> pod.getStatus().getPhase().equals(KubernetesStatus.Running.name()))
+                .filter(pod -> {
+                    final JSONObject dubboMeta = new JSONObject();
+                    pod.getMetadata().getAnnotations().forEach((key, value) -> {
+                        if (key.startsWith(DUBBO_META_KEY)) {
+                            dubboMeta.putAll(JSON.parseObject(value));
+                        }
+                    });
+                    return dubboMeta.get(SVC_KEY) != null &&
+                            dubboMeta.get(SVC_KEY).equals(serviceKey) &&
+                            pod.getStatus().getPhase().equals(KubernetesStatus.Running.name());
+                })
                 .map(this::pod2Url)
                 .collect(Collectors.toList());
     }
