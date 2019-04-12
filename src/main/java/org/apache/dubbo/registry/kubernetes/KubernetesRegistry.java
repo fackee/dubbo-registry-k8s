@@ -70,7 +70,7 @@ public class KubernetesRegistry extends FailbackRegistry {
     protected void doUnregister(URL url) {
         List<Pod> pods = queryPodNameByRegistriedUrl(url);
         if (pods != null && pods.size() > 0) {
-            pods.forEach(this::unregistry);
+            pods.forEach(pod -> unregistry(pod, url));
         }
     }
 
@@ -165,23 +165,24 @@ public class KubernetesRegistry extends FailbackRegistry {
                 .done();
     }
 
-    private void unregistry(Pod pod) {
+    private void unregistry(Pod pod, URL url) {
         Pod registedPod = kubernetesClient.pods().inNamespace(pod.getMetadata().getNamespace()).withName(pod.getMetadata().getName()).get();
-        final StringBuilder removeKey = new StringBuilder();
         if (registedPod.getMetadata().getAnnotations() != null) {
-            registedPod.getMetadata().getAnnotations().forEach((key, value) -> {
-                if (key.startsWith(DUBBO_META_KEY)) {
-                    removeKey.append(key);
+            registedPod.getMetadata().getAnnotations().forEach((removeKey, value) -> {
+                if (removeKey.startsWith(DUBBO_META_KEY)) {
+                    JSONObject jsonObject = JSONObject.parseObject(pod.getMetadata().getAnnotations().get(removeKey));
+                    if (jsonObject.get(FULL_URL) != null && jsonObject.get(FULL_URL).equals(url.toFullString())) {
+                        kubernetesClient.pods().inNamespace(pod.getMetadata().getNamespace()).withName(pod.getMetadata().getName())
+                                .edit()
+                                .editMetadata()
+                                .removeFromLabels(MARK)
+                                .removeFromAnnotations(removeKey)
+                                .and()
+                                .done();
+                    }
                 }
             });
         }
-        kubernetesClient.pods().inNamespace(pod.getMetadata().getNamespace()).withName(pod.getMetadata().getName())
-                .edit()
-                .editMetadata()
-                .removeFromLabels(MARK)
-                .removeFromAnnotations(removeKey.toString())
-                .and()
-                .done();
     }
 
     private List<Pod> queryPodsByUnRegistryUrl(URL url) {
