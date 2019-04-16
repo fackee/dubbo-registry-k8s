@@ -58,6 +58,15 @@ public class KubernetesRegistry extends FailbackRegistry {
         serviceCounter = new AtomicInteger(0);
     }
 
+
+    @Override
+    public void register(URL url) {
+        if(isConsumerSide(url)){
+            return;
+        }
+        super.register(url);
+    }
+
     @Override
     protected void doRegister(URL url) {
         List<Pod> pods = queryPodsByUnRegistryUrl(url);
@@ -67,11 +76,28 @@ public class KubernetesRegistry extends FailbackRegistry {
     }
 
     @Override
+    public void unregister(URL url) {
+        if(isConsumerSide(url)){
+            return;
+        }
+        super.unregister(url);
+    }
+
+    @Override
     protected void doUnregister(URL url) {
         List<Pod> pods = queryPodNameByRegistriedUrl(url);
         if (pods != null && pods.size() > 0) {
             pods.forEach(pod -> unregistry(pod, url));
         }
+    }
+
+    @Override
+    public void subscribe(URL url, NotifyListener listener) {
+        if (isProviderSide(url)) {
+            return;
+        }
+
+        super.subscribe(url, listener);
     }
 
     @Override
@@ -117,6 +143,15 @@ public class KubernetesRegistry extends FailbackRegistry {
     }
 
     @Override
+    public void unsubscribe(URL url, NotifyListener listener) {
+        if (isProviderSide(url)) {
+            return;
+        }
+
+        super.unsubscribe(url, listener);
+    }
+
+    @Override
     protected void doUnsubscribe(URL url, NotifyListener notifyListener) {
         Watch watch = kubernetesWatcherMap.remove(url);
         watch.close();
@@ -135,6 +170,14 @@ public class KubernetesRegistry extends FailbackRegistry {
             Watch watch = kubernetesWatcherMap.remove(url);
             watch.close();
         });
+    }
+
+    private boolean isConsumerSide(URL url) {
+        return url.getProtocol().equals(Constants.CONSUMER_PROTOCOL);
+    }
+
+    private boolean isProviderSide(URL url) {
+        return url.getProtocol().equals(Constants.PROVIDER_PROTOCOL);
     }
 
     private URL pod2Url(Pod pod) {

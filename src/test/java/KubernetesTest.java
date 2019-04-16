@@ -5,6 +5,8 @@
 //import io.kubernetes.client.util.Config;
 //import io.kubernetes.client.util.Watch;
 
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.client.*;
 import okio.Utf8;
@@ -25,7 +27,8 @@ public class KubernetesTest {
     private static final ScheduledExecutorService ses = Executors.newSingleThreadScheduledExecutor();
 
     public static void main(String[] args) throws Exception {
-        k8s();
+
+        //k8s();
 //        ApiClient apiClient = Config.fromConfig("/Users/rocky/tcpdump/config");
 //        Configuration.setDefaultApiClient(apiClient);
 //        CoreV1Api api = new CoreV1Api();
