@@ -256,6 +256,7 @@ public class KubernetesRegistry extends FailbackRegistry {
 
     private List<URL> getAllRunningService() {
         return kubernetesClient.pods()
+                .inNamespace(namespaces)
                 .withLabel(MARK, Constants.DEFAULT_PROTOCOL)
                 .list().getItems().stream()
                 .filter(pod -> pod.getStatus().getPhase().equals(KubernetesStatus.Running.name()))
@@ -265,6 +266,7 @@ public class KubernetesRegistry extends FailbackRegistry {
 
     private List<URL> getServicesByKey(String serviceKey) {
         return kubernetesClient.pods()
+                .inNamespace(namespaces)
                 .withLabel(MARK, Constants.DEFAULT_PROTOCOL)
                 .list().getItems().stream()
                 .filter(pod -> {
