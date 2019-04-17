@@ -11,7 +11,7 @@
 
     <groupId>com.alibaba</groupId>
     <artifactId>dubbo-registry-k8s</artifactId>
-    <version>0.0.2</version>
+    <version>0.0.6</version>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -170,7 +170,7 @@
     <distributionManagement>
         <repository>
             <id>localRepository</id>
-            <url>file:/Users/rocky/apache-maven-3.5.2/repository</url>
+            <url>file:/root/.m2/repository</url>
         </repository>
     </distributionManagement>
 

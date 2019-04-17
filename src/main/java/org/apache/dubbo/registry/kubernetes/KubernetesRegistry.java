@@ -270,18 +270,37 @@ public class KubernetesRegistry extends FailbackRegistry {
                 .withLabel(MARK, Constants.DEFAULT_PROTOCOL)
                 .list().getItems().stream()
                 .filter(pod -> {
-                    final JSONObject dubboMeta = new JSONObject();
+                    final boolean[] matched = {false};
                     pod.getMetadata().getAnnotations().forEach((key, value) -> {
                         if (key.startsWith(DUBBO_META_KEY)) {
-                            dubboMeta.putAll(JSON.parseObject(value));
+                            final JSONObject dubboMeta = JSON.parseObject(value);
+                            if(dubboMeta.get(SVC_KEY) != null &&
+                                    dubboMeta.get(SVC_KEY).equals(serviceKey) &&
+                                    pod.getStatus().getPhase().equals(KubernetesStatus.Running.name())){
+                                matched[0] = true;
+                                return;
+                            }
                         }
                     });
-                    return dubboMeta.get(SVC_KEY) != null &&
-                            dubboMeta.get(SVC_KEY).equals(serviceKey) &&
-                            pod.getStatus().getPhase().equals(KubernetesStatus.Running.name());
+                    return matched[0];
                 })
-                .map(this::pod2Url)
+                .map( pod -> getURLByPodWithServiceKey(pod,serviceKey))
                 .collect(Collectors.toList());
+    }
+
+    private URL getURLByPodWithServiceKey(Pod pod,String serviceKey){
+        final List<URL> urls = new ArrayList<>();
+        pod.getMetadata().getAnnotations().forEach( (key , value) -> {
+            if (key.startsWith(DUBBO_META_KEY)) {
+                final JSONObject dubboMeta = JSON.parseObject(value);
+                if(dubboMeta.get(SVC_KEY) != null &&
+                        dubboMeta.get(SVC_KEY).equals(serviceKey) &&
+                        pod.getStatus().getPhase().equals(KubernetesStatus.Running.name())){
+                    urls.add(URL.valueOf(dubboMeta.getString(FULL_URL)));
+                }
+            }
+        });
+        return CollectionUtils.isEmpty(urls) ? null : urls.get(0);
     }
 
     private List<URL> queryUrls(URL url) {
