@@ -27,6 +27,7 @@ public class KubernetesTest {
     private static final ScheduledExecutorService ses = Executors.newSingleThreadScheduledExecutor();
 
     public static void main(String[] args) throws Exception {
+        put();
 
         //k8s();
 //        ApiClient apiClient = Config.fromConfig("/Users/rocky/tcpdump/config");
@@ -124,5 +125,17 @@ public class KubernetesTest {
                 "}");
         System.out.println(res.toString());
 
+    }
+
+    private static void put(){
+        KubernetesClient kubernetesClient = new DefaultKubernetesClient();
+        kubernetesClient.pods()
+                .inNamespace("kube-apps")
+                .withName("dubbo-caller-app-647d8fdb47-wvgrb")
+                .edit()
+                .editMetadata()
+                .addToAnnotations("com.dubbo.api:1.0.0","{'json':'jsontest'}")
+                .and()
+                .done();
     }
 }

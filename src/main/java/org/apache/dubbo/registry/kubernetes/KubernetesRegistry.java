@@ -38,23 +38,13 @@ public class KubernetesRegistry extends FailbackRegistry {
 
     private final KubernetesClient kubernetesClient;
 
-
-    private static final List<String> ALL_SUPPORTED_CATEGORIES = Collections.unmodifiableList(
-            new ArrayList<String>() {{
-                add(PROVIDERS_CATEGORY);
-                add(CONSUMERS_CATEGORY);
-                add(ROUTERS_CATEGORY);
-                add(CONFIGURATORS_CATEGORY);
-            }}
-    );
-
-    private final static String CATEGORIY_PREFIX = "://";
-
     private final static String FULL_URL = "full_url";
 
     private static final String MARK = "mark";
 
     private static final String APP_LABEL = "app";
+
+    private static final String SERVICE_KEY_PREFIX = "dubbo_service_";
 
     private final Set<String> kubernetesPodSet = new ConcurrentHashSet<>(16);
 
@@ -191,17 +181,6 @@ public class KubernetesRegistry extends FailbackRegistry {
         return url.getProtocol().equals(Constants.PROVIDER_PROTOCOL);
     }
 
-    private List<URL> pod2Url(Pod pod, URL url) {
-        final List<URL> urls = new ArrayList<>();
-        pod.getMetadata().getAnnotations().forEach((key, value) -> {
-            if (key.equals(url.getServiceKey())) {
-                JSONObject dubboMeta = JSON.parseObject(value);
-                urls.add(URL.valueOf(dubboMeta.getString(FULL_URL)));
-            }
-        });
-        return urls;
-    }
-
     private void registry(URL url, Pod pod) {
         JSONObject meta = new JSONObject() {{
             put(Constants.INTERFACE_KEY, url.getServiceInterface());
@@ -212,9 +191,13 @@ public class KubernetesRegistry extends FailbackRegistry {
                 .edit()
                 .editMetadata()
                 .addToLabels(MARK, Constants.DEFAULT_PROTOCOL)
-                .addToAnnotations(url.getServiceKey(), meta.toJSONString())
+                .addToAnnotations(serviceKey2UniqId(url.getServiceKey()), meta.toJSONString())
                 .and()
                 .done();
+    }
+
+    private String serviceKey2UniqId(String serviecKey){
+        return SERVICE_KEY_PREFIX + Integer.toHexString(serviecKey.hashCode());
     }
 
     private void unregistry(Pod pod, URL url) {
@@ -223,7 +206,7 @@ public class KubernetesRegistry extends FailbackRegistry {
                 .withName(pod.getMetadata().getName()).get();
         if (registedPod.getMetadata().getAnnotations() != null) {
             registedPod.getMetadata().getAnnotations().forEach((removeKey, value) -> {
-                if (removeKey.equals(url.getServiceKey())) {
+                if (removeKey.equals(serviceKey2UniqId(url.getServiceKey()))) {
                     kubernetesClient.pods()
                             .inNamespace(pod.getMetadata().getNamespace())
                             .withName(pod.getMetadata().getName())
@@ -242,7 +225,10 @@ public class KubernetesRegistry extends FailbackRegistry {
         return kubernetesClient.pods()
                 .inNamespace(namespaces)
                 .withLabel(APP_LABEL, url.getParameter(KUBERNETES_POD_NAME_KEY))
-                .list().getItems();
+                .list().getItems()
+                .stream()
+                .filter( pod -> pod.getSpec().getHostname().equals(url.getHost()))
+                .collect(Collectors.toList());
     }
 
     private List<Pod> queryPodNameByRegistriedUrl(URL url) {
@@ -251,7 +237,7 @@ public class KubernetesRegistry extends FailbackRegistry {
                 .withLabel(APP_LABEL, url.getParameter(KUBERNETES_POD_NAME_KEY))
                 .withLabel(MARK, Constants.DEFAULT_PROTOCOL)
                 .list().getItems().stream()
-                .filter(pod -> pod.getMetadata().getAnnotations().containsKey(url.getServiceKey()))
+                .filter(pod -> pod.getMetadata().getAnnotations().containsKey(serviceKey2UniqId(url.getServiceKey())))
                 .collect(Collectors.toList());
     }
 
@@ -264,9 +250,7 @@ public class KubernetesRegistry extends FailbackRegistry {
                 .filter(pod -> pod.getStatus().getPhase().equals(KubernetesStatus.Running.name()))
                 .forEach(pod ->
                         pod.getMetadata().getAnnotations().forEach((key, value) -> {
-                            final boolean isDubboService = key.startsWith(CATEGORIY_PREFIX) &&
-                                    ALL_SUPPORTED_CATEGORIES.contains(key.substring(0, key.indexOf(CATEGORIY_PREFIX)));
-                            if (isDubboService) {
+                            if (key.startsWith(SERVICE_KEY_PREFIX)) {
                                 JSONObject dubboMeta = JSON.parseObject(value);
                                 urls.add(URL.valueOf(dubboMeta.getString(FULL_URL)));
                             }
@@ -283,7 +267,7 @@ public class KubernetesRegistry extends FailbackRegistry {
                 .list().getItems().stream()
                 .forEach( pod -> {
                     pod.getMetadata().getAnnotations().forEach( (key,value) -> {
-                        if(key.equals(serviceKey)){
+                        if(key.equals(serviceKey2UniqId(serviceKey))){
                             JSONObject dubboMeta = JSON.parseObject(value);
                             urls.add(URL.valueOf(dubboMeta.getString(FULL_URL)));
                         }

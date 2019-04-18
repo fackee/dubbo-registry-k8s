@@ -11,7 +11,7 @@
 
     <groupId>com.alibaba</groupId>
     <artifactId>dubbo-registry-k8s</artifactId>
-    <version>0.0.6</version>
+    <version>0.0.9</version>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
