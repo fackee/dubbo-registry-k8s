@@ -86,19 +86,19 @@ public class KubernetesTest {
 //                            .done();
         });
 //
-//        Watch watch = client.pods().inNamespace("kube-ym-ad").withLabel("app=app-kubernets-example")
-//                .watch(new Watcher<Pod>() {
-//                    @Override
-//                    public void eventReceived(Action action, Pod pod) {
-//                        System.out.println(action.name() + "," + pod.getStatus().getPhase() + "," + pod.getMetadata().getName());
-//                        System.out.println("========");
-//                    }
-//
-//                    @Override
-//                    public void onClose(KubernetesClientException e) {
-//                        System.out.println(e.getMessage());
-//                    }
-//                });
+        Watch watch = client.pods().inNamespace("kube-ym-ad").withLabel("app=app-kubernets-example")
+                .watch(new Watcher<Pod>() {
+                    @Override
+                    public void eventReceived(Action action, Pod pod) {
+                        System.out.println(action.name() + "," + pod.getStatus().getPhase() + "," + pod.getMetadata().getName());
+                        System.out.println("========");
+                    }
+
+                    @Override
+                    public void onClose(KubernetesClientException e) {
+                        System.out.println(e.getMessage());
+                    }
+                });
     }
 
     private static void gen(){
