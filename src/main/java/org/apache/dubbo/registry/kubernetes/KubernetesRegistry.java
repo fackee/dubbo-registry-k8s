@@ -227,7 +227,7 @@ public class KubernetesRegistry extends FailbackRegistry {
                 .withLabel(APP_LABEL, url.getParameter(KUBERNETES_POD_NAME_KEY))
                 .list().getItems()
                 .stream()
-                .filter( pod -> pod.getSpec().getHostname().equals(url.getHost()))
+                .filter( pod -> pod.getStatus().getPodIP().equals(url.getHost()))
                 .collect(Collectors.toList());
     }
 

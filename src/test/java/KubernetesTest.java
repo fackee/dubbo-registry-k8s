@@ -27,9 +27,9 @@ public class KubernetesTest {
     private static final ScheduledExecutorService ses = Executors.newSingleThreadScheduledExecutor();
 
     public static void main(String[] args) throws Exception {
-        put();
+        //put();
 
-        //k8s();
+        k8s();
 //        ApiClient apiClient = Config.fromConfig("/Users/rocky/tcpdump/config");
 //        Configuration.setDefaultApiClient(apiClient);
 //        CoreV1Api api = new CoreV1Api();
@@ -66,17 +66,16 @@ public class KubernetesTest {
     }
 
     private static void k8s() throws Exception{
-        Config config = new ConfigBuilder().build();
         KubernetesClient client = new DefaultKubernetesClient();
-        String base = Base64.getEncoder().encodeToString("dubbo://192.168.26.113:8888/com.dubbo.api.service.SafeCheckService?anyhost=true&application=app-kubernets-example&application.version=1.0.0&bean.name=ServiceBean:com.dubbo.api.service.SafeCheckService:1.0.0&dubbo=2.0.2&generic=false&interface=com.dubbo.api.service.SafeCheckService&methods=test,isSafe&pid=19645&revision=1.0.0&side=provider&status=server&timestamp=1554964193819&version=1.0.0".getBytes());
-        System.out.println(base);
-        System.out.println(new String(Base64.getDecoder().decode(base)));
-
-        Map<String,String> labels = new HashMap<>();
-        labels.put("app", "app-kubernets-example");
-        client.pods().inNamespace("kube-ym-ad")
-                .withLabels(labels)
+//        String base = Base64.getEncoder().encodeToString("dubbo://192.168.26.113:8888/com.dubbo.api.service.SafeCheckService?anyhost=true&application=app-kubernets-example&application.version=1.0.0&bean.name=ServiceBean:com.dubbo.api.service.SafeCheckService:1.0.0&dubbo=2.0.2&generic=false&interface=com.dubbo.api.service.SafeCheckService&methods=test,isSafe&pid=19645&revision=1.0.0&side=provider&status=server&timestamp=1554964193819&version=1.0.0".getBytes());
+//        System.out.println(base);
+//        System.out.println(new String(Base64.getDecoder().decode(base)));
+        ;
+        client.pods()
+                .inNamespace("kube-ym-ad")
+                .withLabel("app", "app-kubernets-example")
                 .list().getItems().forEach(pod -> {
+                    System.out.println(pod.getSpec().getHostname());
                     System.out.println();
 //                    client.pods().inNamespace(pod.getMetadata().getNamespace()).withName(pod.getMetadata().getName())
 //                            .edit()
@@ -87,19 +86,19 @@ public class KubernetesTest {
 //                            .done();
         });
 //
-        Watch watch = client.pods().inNamespace("kube-ym-ad").withLabel("app=app-kubernets-example")
-                .watch(new Watcher<Pod>() {
-                    @Override
-                    public void eventReceived(Action action, Pod pod) {
-                        System.out.println(action.name() + "," + pod.getStatus().getPhase() + "," + pod.getMetadata().getName());
-                        System.out.println("========");
-                    }
-
-                    @Override
-                    public void onClose(KubernetesClientException e) {
-                        System.out.println(e.getMessage());
-                    }
-                });
+//        Watch watch = client.pods().inNamespace("kube-ym-ad").withLabel("app=app-kubernets-example")
+//                .watch(new Watcher<Pod>() {
+//                    @Override
+//                    public void eventReceived(Action action, Pod pod) {
+//                        System.out.println(action.name() + "," + pod.getStatus().getPhase() + "," + pod.getMetadata().getName());
+//                        System.out.println("========");
+//                    }
+//
+//                    @Override
+//                    public void onClose(KubernetesClientException e) {
+//                        System.out.println(e.getMessage());
+//                    }
+//                });
     }
 
     private static void gen(){
