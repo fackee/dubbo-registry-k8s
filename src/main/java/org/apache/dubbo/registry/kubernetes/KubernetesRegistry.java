@@ -6,6 +6,7 @@ import com.alibaba.dubbo.common.logger.Logger;
 import com.alibaba.dubbo.common.logger.LoggerFactory;
 import com.alibaba.dubbo.common.utils.CollectionUtils;
 import com.alibaba.dubbo.common.utils.ConcurrentHashSet;
+import com.alibaba.dubbo.common.utils.NamedThreadFactory;
 import com.alibaba.dubbo.registry.NotifyListener;
 import com.alibaba.dubbo.registry.support.FailbackRegistry;
 import com.alibaba.fastjson.JSON;
@@ -46,7 +47,7 @@ public class KubernetesRegistry extends FailbackRegistry {
 
     private static final String SERVICE_KEY_PREFIX = "dubbo_service_";
 
-    private final Set<String> kubernetesPodSet = new ConcurrentHashSet<>(16);
+    private static final Executor KUBERNETS_EVENT_EXECUTOR = Executors.newCachedThreadPool(new NamedThreadFactory("kubernetes-event-thread"));
 
 
     private final Map<URL, Watch> kubernetesWatcherMap = new ConcurrentHashMap<>(16);
@@ -109,26 +110,11 @@ public class KubernetesRegistry extends FailbackRegistry {
                         .watch(new Watcher<Pod>() {
                             @Override
                             public void eventReceived(Action action, Pod pod) {
-                                final List<URL> urlList =
-                                        kubernetesClient.pods()
-                                                .inNamespace(namespaces)
-                                                .withLabel(APP_LABEL, url.getParameter(KUBERNETES_POD_NAME_KEY))
-                                                .list().getItems()
-                                                .stream()
-                                                .filter(p -> {
-                                                    if (p.getStatus().getPhase().equals(KubernetesStatus.Running.name())) {
-                                                        Map<String, String> labels = p.getMetadata().getLabels();
-                                                        if (labels.get(MARK) == null) {
-                                                            registry(url, p);
-                                                        }
-                                                        return true;
-                                                    } else {
-                                                        return false;
-                                                    }
-                                                })
-                                                .map( p ->  URL.valueOf(""))
-                                                .collect(Collectors.toList());
-                                doNotify(url, notifyListener, urlList);
+                                KUBERNETS_EVENT_EXECUTOR.execute(() -> {
+                                    final List<URL> urlList = queryUrls(url);
+                                    doNotify(url, notifyListener, urlList);
+
+                                });
                             }
 
                             @Override
@@ -291,4 +277,5 @@ public class KubernetesRegistry extends FailbackRegistry {
         Pending,
         Terminating;
     }
+
 }
