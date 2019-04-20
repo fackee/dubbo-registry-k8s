@@ -110,11 +110,13 @@ public class KubernetesRegistry extends FailbackRegistry {
                         .watch(new Watcher<Pod>() {
                             @Override
                             public void eventReceived(Action action, Pod pod) {
-                                KUBERNETS_EVENT_EXECUTOR.execute(() -> {
-                                    final List<URL> urlList = queryUrls(url);
-                                    doNotify(url, notifyListener, urlList);
+                                if(action == Action.ADDED || action == Action.DELETED){
+                                    KUBERNETS_EVENT_EXECUTOR.execute(() -> {
+                                        final List<URL> urlList = queryUrls(url);
+                                        doNotify(url, notifyListener, urlList);
 
-                                });
+                                    });
+                                }
                             }
 
                             @Override
