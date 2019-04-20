@@ -47,7 +47,7 @@ public class KubernetesRegistry extends FailbackRegistry {
 
     private static final String SERVICE_KEY_PREFIX = "dubbo_service_";
 
-    private static final Executor KUBERNETS_EVENT_EXECUTOR = Executors.newCachedThreadPool(new NamedThreadFactory("kubernetes-event-thread"));
+    private static final ExecutorService KUBERNETS_EVENT_EXECUTOR = Executors.newCachedThreadPool(new NamedThreadFactory("kubernetes-event-thread"));
 
 
     private final Map<URL, Watch> kubernetesWatcherMap = new ConcurrentHashMap<>(16);
@@ -159,6 +159,7 @@ public class KubernetesRegistry extends FailbackRegistry {
             Watch watch = kubernetesWatcherMap.remove(url);
             watch.close();
         });
+        KUBERNETS_EVENT_EXECUTOR.shutdown();
     }
 
     private boolean isConsumerSide(URL url) {
