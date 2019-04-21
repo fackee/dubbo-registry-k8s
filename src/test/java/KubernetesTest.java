@@ -66,17 +66,17 @@ public class KubernetesTest {
     }
 
     private static void k8s() throws Exception{
-        KubernetesClient client = new DefaultKubernetesClient();
+//        KubernetesClient client = new DefaultKubernetesClient();
 //        String base = Base64.getEncoder().encodeToString("dubbo://192.168.26.113:8888/com.dubbo.api.service.SafeCheckService?anyhost=true&application=app-kubernets-example&application.version=1.0.0&bean.name=ServiceBean:com.dubbo.api.service.SafeCheckService:1.0.0&dubbo=2.0.2&generic=false&interface=com.dubbo.api.service.SafeCheckService&methods=test,isSafe&pid=19645&revision=1.0.0&side=provider&status=server&timestamp=1554964193819&version=1.0.0".getBytes());
 //        System.out.println(base);
 //        System.out.println(new String(Base64.getDecoder().decode(base)));
-        ;
-        client.pods()
-                .inNamespace("kube-ym-ad")
-                .withLabel("app", "app-kubernets-example")
-                .list().getItems().forEach(pod -> {
-                    System.out.println(pod.getSpec().getHostname());
-                    System.out.println();
+//        ;
+//        client.pods()
+//                .inNamespace("kube-ym-ad")
+//                .withLabel("app", "app-kubernets-example")
+//                .list().getItems().forEach(pod -> {
+//                    System.out.println(pod.getSpec().getHostname());
+//                    System.out.println();
 //                    client.pods().inNamespace(pod.getMetadata().getNamespace()).withName(pod.getMetadata().getName())
 //                            .edit()
 //                            .editMetadata().addToLabels("mark","dubbo").and()
@@ -84,7 +84,7 @@ public class KubernetesTest {
 //                            .addToAnnotations("full_url","dubbo://192.168.26.113:8888/com.dubbo.api.service.SafeCheckService?anyhost=true&application=app-kubernets-example&application.version=1.0.0&bean.name=ServiceBean:com.dubbo.api.service.SafeCheckService:1.0.0&dubbo=2.0.2&generic=false&interface=com.dubbo.api.service.SafeCheckService&methods=test,isSafe&pid=19645&revision=1.0.0&side=provider&status=server&timestamp=1554964193819&version=1.0.0")
 //                            .and()
 //                            .done();
-        });
+ //       });
 //
 //        Watch watch = client.pods().inNamespace("kube-ym-ad").withLabel("app=app-kubernets-example")
 //                .watch(new Watcher<Pod>() {
@@ -99,6 +99,18 @@ public class KubernetesTest {
 //                        System.out.println(e.getMessage());
 //                    }
 //                });
+        ScheduledExecutorService executorService = Executors.newScheduledThreadPool(5);
+        for(int i=0 ;i<10;i++){
+            final int var = i;
+            executorService.schedule(()->{
+                try {
+                    Thread.sleep(3000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                System.out.println("once" + var);
+            },5,TimeUnit.SECONDS);
+        }
     }
 
     private static void gen(){

@@ -47,7 +47,7 @@ public class KubernetesRegistry extends FailbackRegistry {
 
     private static final String SERVICE_KEY_PREFIX = "dubbo_service_";
 
-    private static final ExecutorService KUBERNETS_EVENT_EXECUTOR = Executors.newCachedThreadPool(new NamedThreadFactory("kubernetes-event-thread"));
+    private static final ScheduledExecutorService KUBERNETS_EVENT_EXECUTOR = Executors.newScheduledThreadPool(8,new NamedThreadFactory("kubernetes-event-thread"));
 
 
     private final Map<URL, Watch> kubernetesWatcherMap = new ConcurrentHashMap<>(16);
@@ -111,11 +111,11 @@ public class KubernetesRegistry extends FailbackRegistry {
                             @Override
                             public void eventReceived(Action action, Pod pod) {
                                 if(action == Action.ADDED || action == Action.DELETED){
-                                    KUBERNETS_EVENT_EXECUTOR.execute(() -> {
+                                    KUBERNETS_EVENT_EXECUTOR.schedule(() -> {
                                         final List<URL> urlList = queryUrls(url);
                                         doNotify(url, notifyListener, urlList);
 
-                                    });
+                                    },5,TimeUnit.SECONDS);
                                 }
                             }
 
